@@ -1,24 +1,10 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Generated sprites
+output/
 
-node_modules
-dist
-dist-ssr
-*.local
+# Blender backups
+*.blend1
+*.blend2
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# OS junk
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+Thumbs.db
