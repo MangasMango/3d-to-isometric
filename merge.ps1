@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Stamatis Valis
+# SPDX-License-Identifier: GPL-3.0-only
+#
 # Merges animation-only FBX/GLB files onto a character and exports one GLB
 # with embedded clips (for packs like Kenney's where animations are separate).
 # Usage: .\merge.ps1 <character-file> <anims-folder> <out.glb>

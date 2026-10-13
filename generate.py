@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Stamatis Valis
+# SPDX-License-Identifier: GPL-3.0-only
+#
 # Blender headless isometric sprite generator.
 #
 # Scans models/ for 3D assets (GLB / GLTF / FBX / OBJ) and renders each one

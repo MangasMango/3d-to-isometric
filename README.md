@@ -75,3 +75,17 @@ To instead bake character + animations into a single GLB:
 - Blender's FBX/GLTF importers sometimes produce materials with alpha 0
   (invisible in renders); the script clamps those to opaque automatically.
 - Models are rendered as-is; use `--yaw` if a model faces the wrong way.
+
+## License
+
+Copyright (C) 2026 Stamatis Valis. This project is licensed under the
+GNU General Public License v3.0 only — see [LICENSE](LICENSE) for the full text
+(`SPDX-License-Identifier: GPL-3.0-only`).
+
+The scripts run inside Blender (itself GPL-licensed) via `bpy`, so a
+GPL-compatible license is required, not just a preference.
+
+The bundled sample assets under `models/playable character/` are from
+Kenney's *Animated Characters (Retro)* pack, licensed CC0 1.0 (public domain
+dedication) — compatible with this project's GPL-3.0-only license.
+See https://kenney.nl for the original packs.
