@@ -1,5 +1,5 @@
 # Copyright (C) 2026 Stamatis Valis
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 #
 # Blender headless isometric sprite generator.
 #

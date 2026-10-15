@@ -1,5 +1,5 @@
 # Copyright (C) 2026 Stamatis Valis
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 #
 # Merge animation-only FBX/GLB files onto a character rig and export one
 # GLB with embedded clips. Works when the animation files use the same
