@@ -32,10 +32,15 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 
 import bpy
 from mathutils import Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import procedural_anims
+import rig_map
 
 # Same 16 compass directions the game's iso_engine.py uses.
 COMPASS = [
@@ -85,6 +90,18 @@ def parse_args():
     p.add_argument('--texture', default='',
                    help='explicit texture image to apply to untextured '
                         'materials (default: auto-detect near the model)')
+    p.add_argument('--target', choices=['iso', 'fighter'], default='iso',
+                   help='iso: current sprite pipeline; fighter: generate the '
+                        '7-clip bound-to-rot fighter set on the rig and '
+                        'render the drop-in fighter layout')
+    p.add_argument('--char-px', type=float, default=0.0,
+                   help='frame so the character renders ~N px tall '
+                        '(fighter mode default: 33)')
+    p.add_argument('--bone-map', default='',
+                   help='explicit bone_map.json overriding auto bone mapping')
+    p.add_argument('--deploy', default='',
+                   help='copy the rendered character folder into '
+                        '<path>/<category>/<character>/ (e.g. the game assets)')
     return p.parse_args(argv)
 
 
@@ -155,6 +172,26 @@ def world_bbox(objects):
     for ob in objects:
         for corner in ob.bound_box:
             pts.append(ob.matrix_world @ Vector(corner))
+    lo = Vector((min(p.x for p in pts), min(p.y for p in pts),
+                 min(p.z for p in pts)))
+    hi = Vector((max(p.x for p in pts), max(p.y for p in pts),
+                 max(p.z for p in pts)))
+    return lo, hi
+
+
+def eval_world_bbox(objects):
+    """World AABB of the EVALUATED meshes (includes armature deformation),
+    used for char-px framing where the staged pose matters."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    pts = []
+    for ob in objects:
+        if ob.type != 'MESH':
+            continue
+        ob_eval = ob.evaluated_get(dg)
+        for corner in ob_eval.bound_box:
+            pts.append(ob_eval.matrix_world @ Vector(corner))
+    if not pts:
+        return world_bbox(objects)
     lo = Vector((min(p.x for p in pts), min(p.y for p in pts),
                  min(p.z for p in pts)))
     hi = Vector((max(p.x for p in pts), max(p.y for p in pts),
@@ -277,7 +314,7 @@ def apply_textures(texture_paths):
 
 
 def setup_stage(size, pitch, padding, yaw, fixed_frame=0.0, shadow=True,
-                shadow_scale=1.0):
+                shadow_scale=1.0, char_px=0.0):
     """Center the imported model at the origin (feet down), build camera +
     lights. Returns the camera and the framing half-extent."""
     meshes = [ob for ob in bpy.context.scene.objects if ob.type == 'MESH']
@@ -296,13 +333,30 @@ def setup_stage(size, pitch, padding, yaw, fixed_frame=0.0, shadow=True,
     rig.rotation_euler = (0.0, 0.0, math.radians(yaw))
     bpy.context.view_layer.update()
 
-    lo, hi = world_bbox(meshes)
+    if char_px > 0:
+        # frame against the staged pose (evaluated bounds)
+        lo, hi = eval_world_bbox(meshes)
+    else:
+        lo, hi = world_bbox(meshes)
     center = (lo + hi) / 2.0
     rig.location = Vector((-center.x, -center.y, -lo.z))
     bpy.context.view_layer.update()
 
     dims = hi - lo
-    if fixed_frame > 0:
+    if char_px > 0 and dims.z > 0:
+        # Frame by target on-screen character height: at pitch p a body of
+        # height z and horizontal depth d projects to z*cos(p) + d*sin(p)
+        # under the ortho camera. Use the larger horizontal extent so the
+        # framing is safe for every direction.
+        horizontal = max(dims.x, dims.y)
+        projected = (dims.z * math.cos(math.radians(pitch))
+                     + horizontal * math.sin(math.radians(pitch)))
+        half = projected * size / (2.0 * char_px)
+        # Reference pack: feet sit ~18% of char height below frame center.
+        rig.location.z -= 0.18 * dims.z
+        print('[stage] char-px framing: dims=(%.3f, %.3f, %.3f) half=%.3f'
+              % (dims.x, dims.y, dims.z, half))
+    elif fixed_frame > 0:
         # One world scale for all models (matches an existing asset set).
         half = fixed_frame / 2.0
     else:
@@ -468,22 +522,69 @@ def merge_anim_folder(anims_dir):
             continue
         act.name = stem
         act.use_fake_user = True
+        char_arm = next((ob for ob in bpy.context.scene.objects
+                         if ob.type == 'ARMATURE'), None)
+        if char_arm:
+            dropped = rig_map.strip_missing_fcurves(act, char_arm)
+            if dropped:
+                print('[iso]   anim %s: dropped %d curve(s) for missing bones'
+                      % (stem, dropped))
         count += 1
         print('[iso]   merged animation %s (frames %s)' %
               (stem, tuple(round(f, 1) for f in act.frame_range)))
     return count
 
 
+def fighter_layout_root(out_root, name):
+    """fighter: <out>/<category>/<name>/<name>_<clip>/..."""
+    return os.path.join(out_root, name)
+
+
+def deploy_character(char_dir, deploy_root, category, name):
+    dest = os.path.join(deploy_root, category, name) if category \
+        else os.path.join(deploy_root, name)
+    os.makedirs(os.path.dirname(dest) or deploy_root, exist_ok=True)
+    shutil.copytree(char_dir, dest, dirs_exist_ok=True)
+    print('[iso]   deployed to %s' % dest)
+
+
 def process_model(args, dirs, category, name, filepath, anims_dir=None):
-    print('[iso] === %s/%s ===' % (category, name))
+    fighter = args.target == 'fighter'
+    tag = 'fighter' if fighter else 'iso'
+    print('[%s] === %s/%s ===' % (tag, category, name))
     reset_scene()
     try:
         import_model(filepath)
     except Exception as e:
-        print('[iso] SKIP (import failed: %s)' % e)
+        print('[%s] SKIP (import failed: %s)' % (tag, e))
         return None
 
-    if anims_dir:
+    mapping = None
+    if fighter:
+        armatures = [ob for ob in bpy.context.scene.objects
+                     if ob.type == 'ARMATURE']
+        if not armatures:
+            print('[fighter] SKIP (no armature - fighter mode needs a '
+                  'rigged model)')
+            return None
+        arm = armatures[0]
+        bone_map = args.bone_map
+        if not bone_map:
+            model_dir = os.path.dirname(filepath)
+            stem = os.path.splitext(os.path.basename(filepath))[0]
+            for cand in (os.path.join(model_dir, 'bone_map.json'),
+                         os.path.join(model_dir, stem + '.json')):
+                if os.path.isfile(cand):
+                    bone_map = cand
+                    break
+        try:
+            mapping = rig_map.resolve_mapping(arm, bone_map)
+        except rig_map.RigMapError as e:
+            print('[fighter] SKIP (%s)' % e)
+            return None
+        clips = procedural_anims.generate_all(arm, mapping)
+        print('[fighter] generated %d clip(s)' % len(clips))
+    elif anims_dir:
         n = merge_anim_folder(anims_dir)
         print('[iso]   merged %d animation(s) from anims/' % n)
 
@@ -493,20 +594,38 @@ def process_model(args, dirs, category, name, filepath, anims_dir=None):
         tex_paths = find_texture_images(os.path.dirname(filepath))
     applied = apply_textures(tex_paths)
     if applied:
-        print('[iso]   textured %d material(s)' % applied)
+        print('[%s]   textured %d material(s)' % (tag, applied))
 
+    char_px = args.char_px
+    if fighter and char_px <= 0:
+        char_px = 33.0
+    shadow = (not args.no_shadow) and not fighter
+    if fighter:
+        # Stage against the posed idle, not the T-pose rest state, so the
+        # framing matches the sprites that actually get rendered.
+        idle = bpy.data.actions.get('default_idle')
+        arm = next((ob for ob in bpy.context.scene.objects
+                    if ob.type == 'ARMATURE'), None)
+        if idle and arm:
+            bind_action(arm, idle)
+            bpy.context.scene.frame_set(0)
+            bpy.context.view_layer.update()
     cam, half = setup_stage(args.size, args.pitch, args.padding, args.yaw,
-                            args.fixed_frame, not args.no_shadow,
-                            args.shadow_scale)
+                            args.fixed_frame, shadow,
+                            args.shadow_scale, char_px)
     if cam is None:
-        print('[iso] SKIP (no mesh objects - animation-only file?)')
+        print('[%s] SKIP (no mesh objects - animation-only file?)' % tag)
         return None
     sc = setup_render(args.size)
 
     meshes = [ob for ob in sc.objects if ob.type == 'MESH']
     armature = next((ob.find_armature() for ob in meshes
                      if ob.find_armature()), None)
-    actions = get_actions(meshes) if armature else []
+    if fighter:
+        actions = [bpy.data.actions[c] for c in procedural_anims.FIGHTER_CLIPS
+                   if c in bpy.data.actions]
+    else:
+        actions = get_actions(meshes) if armature else []
 
     out_root = os.path.join(args.output, category) if category else args.output
     entries = []
@@ -519,7 +638,7 @@ def process_model(args, dirs, category, name, filepath, anims_dir=None):
             path = os.path.join(out_root, name, dname, fname)
             render_to(sc, cam, path)
             entries.append({'clip': None, 'dir': dname, 'frames': 1})
-        print('[iso]   static: 16 directions')
+        print('[%s]   static: 16 directions' % tag)
     else:
         for act in actions:
             clip = safe_name(act.name)
@@ -531,21 +650,40 @@ def process_model(args, dirs, category, name, filepath, anims_dir=None):
             n = max(1, min(args.frames, int(dur) + 1)) if dur > 0 else 1
             for f in range(n):
                 if dur > 0:
-                    frame = fr_start + f * (dur / n)
-                    sc.frame_set(int(frame))
+                    if fighter and n > 1:
+                        # fighter clips are keyed on exact frames 0..N-1
+                        frame = fr_start + f * dur / (n - 1)
+                    else:
+                        frame = fr_start + f * (dur / n)
+                    sc.frame_set(int(round(frame)))
                 else:
                     sc.frame_set(int(fr_start))
                 for dname, angle in dirs:
                     place_camera(cam, angle, args.pitch)
                     fname = '%s_%s_%s_%d.png' % (render_name, dname,
                                                  angle_format(angle), f)
-                    path = os.path.join(out_root, render_name, dname, fname)
+                    if fighter:
+                        path = os.path.join(fighter_layout_root(out_root, name),
+                                            render_name, dname, fname)
+                    else:
+                        path = os.path.join(out_root, render_name, dname, fname)
                     render_to(sc, cam, path)
             entries.append({'clip': clip, 'frames': n})
-            print('[iso]   clip %s: %d frames x 16 directions' % (clip, n))
+            print('[%s]   clip %s: %d frames x %d directions'
+                  % (tag, clip, n, len(dirs)))
 
-    return {'category': category, 'model': name, 'source': filepath,
-            'renders': entries}
+    if args.deploy:
+        if fighter:
+            deploy_character(fighter_layout_root(out_root, name),
+                             args.deploy, category, name)
+        else:
+            print('[iso]   --deploy is a fighter-mode option, ignored')
+
+    result = {'category': category, 'model': name, 'source': filepath,
+              'renders': entries}
+    if fighter and mapping is not None:
+        result['bone_map'] = mapping
+    return result
 
 
 def angle_format(angle):
@@ -567,12 +705,17 @@ def main():
 
     os.makedirs(args.output, exist_ok=True)
     manifest = {'size': args.size, 'frames': args.frames, 'fps': args.fps,
-                'pitch': args.pitch, 'models': []}
+                'pitch': args.pitch, 'target': args.target, 'models': []}
     for i, (category, name, filepath, anims_dir) in enumerate(models, 1):
-        print('[iso] (%d/%d)' % (i, len(models)))
+        print('[%s] (%d/%d)' % (args.target, i, len(models)))
         result = process_model(args, dirs, category, name, filepath, anims_dir)
         if result:
             manifest['models'].append(result)
+            clips = [e['clip'] for e in result['renders'] if e['clip']]
+            total = sum(e.get('frames', 1) * len(dirs)
+                        for e in result['renders'])
+            print('[%s] summary %s: %d clip(s), ~%d PNG(s)'
+                  % (args.target, name, len(clips), total))
 
     with open(os.path.join(args.output, 'manifest.json'), 'w') as fh:
         json.dump(manifest, fh, indent=2)

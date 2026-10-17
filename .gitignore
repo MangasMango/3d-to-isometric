@@ -1,5 +1,14 @@
+# AI working notes
+.ai/
+
 # Generated sprites
 output/
+
+# Merged GLB exports
+merged/
+
+# Python bytecode
+__pycache__/
 
 # Blender backups
 *.blend1

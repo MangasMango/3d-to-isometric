@@ -5,9 +5,14 @@
 # GLB with embedded clips. Works when the animation files use the same
 # skeleton (bone names) as the character - e.g. Kenney asset packs.
 #
+# With -Clips fighter, the 7-clip bound-to-rot fighter set is generated
+# procedurally on the (auto bone-mapped) rig instead - no anims needed.
+#
 # Usage:
 #   blender --background --python merge_anims.py -- --character CHAR.fbx --anims DIR --out OUT.glb
+#   blender --background --python merge_anims.py -- --character CHAR.fbx --clips fighter --out OUT.glb
 # or: .\merge.ps1 <character-file> <anims-folder> <out.glb>
+#     .\merge.ps1 -Character CHAR.fbx -Clips fighter -Out OUT.glb
 
 import argparse
 import os
@@ -16,14 +21,25 @@ import sys
 
 import bpy
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import procedural_anims
+import rig_map
+
 
 def parse_args():
     argv = sys.argv
     argv = argv[argv.index('--') + 1:] if '--' in argv else []
     p = argparse.ArgumentParser()
     p.add_argument('--character', required=True)
-    p.add_argument('--anims', required=True)
+    p.add_argument('--anims', default='',
+                   help='folder of animation-only FBX/GLB files '
+                        '(required unless --clips fighter)')
     p.add_argument('--out', required=True)
+    p.add_argument('--clips', default='', choices=['', 'fighter'],
+                   help='generate a clip set on the rig instead of '
+                        'importing --anims')
+    p.add_argument('--bone-map', default='',
+                   help='explicit bone_map.json overriding auto bone mapping')
     return p.parse_args(argv)
 
 
@@ -69,36 +85,69 @@ def grab_action(pre_import_names, new_object_names, stem):
 
 def main():
     args = parse_args()
+    if not args.clips and not args.anims:
+        print('[merge] ERROR: need --anims DIR or --clips fighter')
+        sys.exit(1)
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
     import_file(args.character)
-    char_armatures = set(ob.data.name for ob in bpy.context.scene.objects
-                         if ob.type == 'ARMATURE')
-    print('[merge] character armature(s): %s' % ', '.join(char_armatures))
+    armatures = [ob for ob in bpy.context.scene.objects
+                 if ob.type == 'ARMATURE']
+    if armatures:
+        print('[merge] character armature(s): %s'
+              % ', '.join(ob.data.name for ob in armatures))
+    else:
+        print('[merge] no armature found')
 
     merged = []
-    for fn in sorted(os.listdir(args.anims)):
-        if fn.startswith('.') or not fn.lower().endswith(('.fbx', '.glb', '.gltf')):
-            continue
-        path = os.path.join(args.anims, fn)
-        stem = re.sub(r'[^\w\-.]', '_', os.path.splitext(fn)[0].strip())
-        before = scene_objects()
-        known_actions = set(a.name for a in bpy.data.actions)
+    if args.clips == 'fighter':
+        if not armatures:
+            print('[merge] ERROR: fighter clips need a rigged character')
+            sys.exit(1)
+        arm = armatures[0]
+        bone_map = args.bone_map
+        if not bone_map:
+            model_dir = os.path.dirname(os.path.abspath(args.character))
+            stem = os.path.splitext(os.path.basename(args.character))[0]
+            for cand in (os.path.join(model_dir, 'bone_map.json'),
+                         os.path.join(model_dir, stem + '.json')):
+                if os.path.isfile(cand):
+                    bone_map = cand
+                    break
         try:
-            import_file(path)
-        except Exception as e:
-            print('[merge] SKIP %s (import failed: %s)' % (fn, e))
-            remove_objects(scene_objects() - before)
-            continue
-        new_names = scene_objects() - before
-        act = grab_action(known_actions, new_names, stem)
-        remove_objects(new_names)
-        if act is None:
-            print('[merge] SKIP %s (no action found)' % fn)
-            continue
-        print('[merge] merged %s -> action "%s" (frames %s)' %
-              (fn, act.name, tuple(round(f, 1) for f in act.frame_range)))
-        merged.append(act.name)
+            mapping = rig_map.resolve_mapping(arm, bone_map)
+        except rig_map.RigMapError as e:
+            print('[merge] ERROR: %s' % e)
+            sys.exit(1)
+        merged = procedural_anims.generate_all(arm, mapping)
+    else:
+        for fn in sorted(os.listdir(args.anims)):
+            if fn.startswith('.') or not fn.lower().endswith(('.fbx', '.glb', '.gltf')):
+                continue
+            path = os.path.join(args.anims, fn)
+            stem = re.sub(r'[^\w\-.]', '_', os.path.splitext(fn)[0].strip())
+            before = scene_objects()
+            known_actions = set(a.name for a in bpy.data.actions)
+            try:
+                import_file(path)
+            except Exception as e:
+                print('[merge] SKIP %s (import failed: %s)' % (fn, e))
+                remove_objects(scene_objects() - before)
+                continue
+            new_names = scene_objects() - before
+            act = grab_action(known_actions, new_names, stem)
+            remove_objects(new_names)
+            if act is None:
+                print('[merge] SKIP %s (no action found)' % fn)
+                continue
+            if armatures:
+                dropped = rig_map.strip_missing_fcurves(act, armatures[0])
+                if dropped:
+                    print('[merge] %s: dropped %d curve(s) for missing bones'
+                          % (stem, dropped))
+            print('[merge] merged %s -> action "%s" (frames %s)' %
+                  (fn, act.name, tuple(round(f, 1) for f in act.frame_range)))
+            merged.append(act.name)
 
     if not merged:
         print('[merge] ERROR: no animations merged, not writing output')
