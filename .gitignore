@@ -1,6 +1,10 @@
 # AI working notes
 .ai/
 
+# Local test characters (working copies of the tracked Kenney sample)
+models/playable character/knight/
+models/playable character/fighter/
+
 # Generated sprites
 output/
 

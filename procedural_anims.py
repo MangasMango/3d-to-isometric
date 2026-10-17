@@ -83,14 +83,16 @@ def _walk_frame(rig, height, i, armed):
     s = math.cos(ph)
     # body high at contact, low at pass. BOTH knees flex at mid-stance
     # (real walk pattern) - that chain-shortening is what actually shrinks
-    # the silhouette; a pure hip nudge just translates it.
+    # the silhouette; a pure hip nudge just translates it. The shin's BACK
+    # weight stays modest: it swings the foot toward/away from the camera,
+    # which at pitch cancels the bob in front/back views.
     bob = math.cos(2.0 * ph)
-    bend_base = (1.0 - bob) * 0.35
+    bend_base = (1.0 - bob) * 0.30
     bend_l = bend_base + max(0.0, math.sin(ph)) * 0.3
     bend_r = bend_base + max(0.0, -math.sin(ph)) * 0.3
 
     rig.aim('Hips', UP)
-    rig.nudge('Hips', (0.0, 0.0, 0.05 * height * bob))
+    rig.nudge('Hips', (0.0, 0.0, 0.10 * height * bob))
     rig.aim('Spine', _mix(UP, FWD, 0.07))
     rig.aim('Chest', _mix(UP, FWD, 0.06))
     rig.twist('Chest', 0.14 * s)
@@ -99,8 +101,8 @@ def _walk_frame(rig, height, i, armed):
 
     rig.aim('LeftUpLeg', _mix(DOWN, FWD, 0.5 * s, LEFT, 0.07))
     rig.aim('RightUpLeg', _mix(DOWN, FWD, -0.5 * s, RIGHT, 0.07))
-    rig.aim('LeftLeg', _mix(DOWN, FWD, 0.5 * s, BACK, 0.9 * bend_l, LEFT, 0.05))
-    rig.aim('RightLeg', _mix(DOWN, FWD, -0.5 * s, BACK, 0.9 * bend_r, RIGHT, 0.05))
+    rig.aim('LeftLeg', _mix(DOWN, FWD, 0.5 * s, BACK, 0.45 * bend_l, LEFT, 0.05))
+    rig.aim('RightLeg', _mix(DOWN, FWD, -0.5 * s, BACK, 0.45 * bend_r, RIGHT, 0.05))
     rig.aim('LeftFoot', _mix(FWD, DOWN, 0.55, UP, 0.3 * bend_l))
     rig.aim('RightFoot', _mix(FWD, DOWN, 0.55, UP, 0.3 * bend_r))
 

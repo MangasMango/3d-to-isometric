@@ -202,18 +202,39 @@ def eval_world_bbox(objects):
 def place_camera(cam, angle_deg, pitch_deg):
     """Position the camera for one compass direction.
 
-    Replicates the three.js capture math (Y-up):
-        pos = (sin(az)cos(pit), sin(pit), cos(az)cos(pit)) * dist
-    converted to Blender's Z-up space via (x, y, z)_three -> (x, -z, y)_b.
+    Calibrated against the reference pack (ground truth, verified at 10x):
+    sprite N = front view, S = back, E = right-facing profile - i.e.
+    up-screen (N) is TOWARD the viewer and E is screen-right, matching
+    iso_engine.world_to_screen + MOVE_DIR.
+
+    With the model facing -Y (toe-bone direction on Kenney imports), the
+    camera position must be the original three.js mapping shifted -90:
+        rho(D) = DIR_ANGLE(D) - 90
+        horizontal pos = (sin rho, -cos rho) = (-cos(az), -sin(az))
+    The old (sin, -cos) mapping orbited 90 degrees out of phase; a
+    naive ( -cos, +sin ) 'fix' mirrors the orbit instead - both produce
+    direction sets that flip against the pack.
+
+    Key/fill lights are repositioned relative to the camera every call so
+    every direction is front-lit like the reference pack (they used to be
+    fixed in world space).
     """
     dist = cam['dist']
     az = math.radians(angle_deg)
     pit = math.radians(pitch_deg)
-    cam.location = Vector((math.sin(az) * math.cos(pit) * dist,
-                           -math.cos(az) * math.cos(pit) * dist,
+    cam.location = Vector((-math.cos(az) * math.cos(pit) * dist,
+                           -math.sin(az) * math.cos(pit) * dist,
                            math.sin(pit) * dist))
     direction = Vector((0.0, 0.0, 0.0)) - cam.location
     cam.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+    for name, off, z, r in (('Key', 0.6, 6.0, 5.0),
+                            ('Fill', -0.9, 2.0, 5.5)):
+        ob = bpy.context.scene.objects.get(name)
+        if ob is None:
+            continue
+        a = az + off
+        ob.location = Vector((-math.cos(a) * r, -math.sin(a) * r, z))
+        ob.rotation_euler = ob.location.to_track_quat('-Z', 'Y').to_euler()
 
 
 def make_shadow_image():
@@ -551,6 +572,14 @@ def deploy_character(char_dir, deploy_root, category, name):
 def process_model(args, dirs, category, name, filepath, anims_dir=None):
     fighter = args.target == 'fighter'
     tag = 'fighter' if fighter else 'iso'
+    if fighter and category:
+        # scan_models keeps a model's own folder in the category unless an
+        # anims/ sibling drops it; fighter layout + deploy append the name
+        # again, so strip a trailing "<name>" segment to avoid cat/name/name.
+        if category == name:
+            category = ''
+        elif category.endswith('/' + name):
+            category = category[:-(len(name) + 1)]
     print('[%s] === %s/%s ===' % (tag, category, name))
     reset_scene()
     try:
@@ -598,7 +627,10 @@ def process_model(args, dirs, category, name, filepath, anims_dir=None):
 
     char_px = args.char_px
     if fighter and char_px <= 0:
-        char_px = 33.0
+        # empirical: the projection formula under-reads the alpha bbox on
+        # back views (~26px actual at 33) - 38 lands idle in 30-33px,
+        # matching the reference pack's 33px character.
+        char_px = 38.0
     shadow = (not args.no_shadow) and not fighter
     if fighter:
         # Stage against the posed idle, not the T-pose rest state, so the
